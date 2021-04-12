@@ -1,0 +1,387 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "vmScyllaSize": {
+      "metadata": {
+        "description": "VM size for Scylla node."
+      },
+      "type": "string",
+      "defaultValue": "Standard_L8s_v2",
+      "allowedValues": [
+        "Standard_L8s_v2",
+        "Standard_L16s_v2",
+        "Standard_L32s_v2",
+        "Standard_L48s_v2",
+        "Standard_L48s_v2"
+      ]
+    },
+    "Scylla-VM-prefix": {
+      "metadata": {
+        "description": "Scylla VM nodes name."
+      },
+      "type": "string",
+      "defaultValue": "scylla-node"
+    },
+    "vmNumberOfnodes": {
+      "metadata": {
+        "description": "Number of VMs to create to support the nodes.  Each node is created on it's own VM.  Minimum of 3 & Maximum of 12 VMs."
+      },
+      "type": "int",
+      "defaultValue": 3,
+      "minValue": 3,
+      "maxValue": 12
+    },
+    "vmAdminUserName": {
+      "defaultValue": "azureuser",
+      "metadata": {
+        "description": "Specific an admin username that should be used to login to the VM."
+      },
+      "type": "string",
+      "minLength": 3
+    },
+    "adminPublicKey": {
+      "type": "string",
+      "metadata": {
+        "description": "Specifies the SSH rsa public key file as a string. Use \"ssh-keygen -t rsa -b 2048\" to generate your SSH key pairs."
+      }
+    },
+    "vmAdminPassword": {
+      "metadata": {
+        "description": "Specific an admin password that should be used to login to the VM."
+      },
+      "type": "securestring"
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Location for all resources."
+      }
+    }
+  },
+  "variables":{
+    "osImagePublisher": "OpenLogic",
+    "osImageOffer": "CentOS",
+    "osVersion": "7.7",
+    "apiVersion": "2020-06-01",
+    "vnetScyllaPrefix": "10.0.0.0/24",
+    "vnetScyllaSubnetName": "Scylla-Subnet",
+    "nsgScyllaName": "nsg-scylla",
+    "nicNodeNamePrefix": "nic-node-",
+    "nicNodeIPPrefix": "10.0.0.",
+    "nicNodeIPStart": 10,
+    "nicNodeSubnetRef": "[resourceId('Microsoft.Network/virtualNetworks/subnets', 'vnet-scylla', variables('vnetScyllaSubnetName'))]",
+    "publicIPNodeNamePrefix": "public-ip-node-"
+  },
+  "resources": [
+    {
+      "name": "vnet-scylla",
+      "type": "Microsoft.Network/virtualNetworks",
+      "location": "[parameters('location')]",
+      "apiVersion": "[variables('apiVersion')]",
+      "tags": {
+        "displayName": "vnetScylla"
+      },
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "[variables('vnetScyllaPrefix')]"
+          ]
+        },
+        "subnets": [
+          {
+            "name": "[variables('vnetScyllaSubnetName')]",
+            "properties": {
+              "addressPrefix": "[variables('vnetScyllaPrefix')]"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "[variables('apiVersion')]",
+      "copy": {
+        "name": "publicIPNodeLoop",
+        "count": "[parameters('vmNumberOfnodes')]"
+      },
+      "location": "[parameters('location')]",
+      "name": "[concat(variables('publicIPNodeNamePrefix'), copyIndex(1))]",
+      "properties": {
+        "publicIPAllocationMethod": "Static"
+      },
+      "tags": {
+        "displayName": "publicIPNode"
+      },
+      "type": "Microsoft.Network/publicIPAddresses"
+    },
+    {
+      "apiVersion": "[variables('apiVersion')]",
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "name": "[variables('nsgScyllaName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "securityRules": [
+          {
+            "name": "ssh",
+            "properties": {
+              "description": "Allow SSH",
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "22",
+              "sourceAddressPrefix": "Internet",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 100,
+              "direction": "Inbound"
+            }
+          },
+          {
+             "name": "scylla_cql_ssl_cql_port_9042-9142",
+             "properties": {
+               "description": "CQL and SSL CQL ports",
+               "provisioningState": "Succeeded",
+               "protocol": "*",
+               "sourcePortRange": "*",
+               "sourceAddressPrefix": "*",
+               "destinationAddressPrefix": "*",
+               "access": "Allow",
+               "priority": 101,
+               "direction": "Inbound",
+               "sourcePortRanges": [],
+               "destinationPortRanges": [
+                   "9042",
+                   "9142"
+                ]
+             }
+          },
+          {
+             "name": "Scylla_Inter_node_comm_7000-7001",
+             "properties": {
+               "description": "SSL and non-SSL Scylla inter-node communication",
+               "provisioningState": "Succeeded",
+               "protocol": "*",
+               "sourcePortRange": "*",
+               "sourceAddressPrefix": "*",
+               "destinationAddressPrefix": "*",
+               "access": "Allow",
+               "priority": 102,
+               "direction": "Inbound",
+               "sourcePortRanges": [],
+               "destinationPortRanges": [
+                   "7000",
+                   "7001"
+                ]
+             }
+          },
+          {
+            "name": "Scylla_JMX_mng-7199",
+        "properties": {
+               "description": "7199 JMX management",
+               "provisioningState": "Succeeded",
+               "protocol": "*",
+               "sourcePortRange": "*",
+               "destinationPortRange": "7199",
+               "sourceAddressPrefix": "*",
+               "destinationAddressPrefix": "*",
+               "access": "Allow",
+               "priority": 103,
+               "direction": "Inbound"
+            }
+          },
+          {
+            "name": "Scylla_REST_API-10000",
+        "properties": {
+               "description": "10000 Scylla REST API",
+               "provisioningState": "Succeeded",
+               "protocol": "*",
+               "sourcePortRange": "*",
+               "destinationPortRange": "10000",
+               "sourceAddressPrefix": "*",
+               "destinationAddressPrefix": "*",
+               "access": "Allow",
+               "priority": 104,
+               "direction": "Inbound"
+            }
+          },
+          {
+            "name": "Scylla_MANAGER-10001",
+        "properties": {
+               "description": "10001 Scylla Manager",
+               "provisioningState": "Succeeded",
+               "protocol": "*",
+               "sourcePortRange": "*",
+               "destinationPortRange": "10001",
+               "sourceAddressPrefix": "*",
+               "destinationAddressPrefix": "*",
+               "access": "Allow",
+               "priority": 105,
+               "direction": "Inbound"
+            }
+          },
+          {
+            "name": "Scylla_client_thrift-9160",
+        "properties": {
+               "description": "Scylla Client Port - thrift 9160",
+               "provisioningState": "Succeeded",
+               "protocol": "*",
+               "sourcePortRange": "*",
+               "destinationPortRange": "9160",
+               "sourceAddressPrefix": "*",
+               "destinationAddressPrefix": "*",
+               "access": "Allow",
+               "priority": 106,
+               "direction": "Inbound"
+            }
+          },
+          {
+            "name": "Prometheus_API-9180",
+        "properties": {
+               "description": "Prometheus API 9180 monitoring",
+               "provisioningState": "Succeeded",
+               "protocol": "*",
+               "sourcePortRange": "*",
+               "destinationPortRange": "9180",
+               "sourceAddressPrefix": "*",
+               "destinationAddressPrefix": "*",
+               "access": "Allow",
+               "priority": 107,
+               "direction": "Inbound"
+            }
+          },
+          {
+            "name": "Port_9100_node_exporter",
+        "properties": {
+               "description": "node exporter - monitoring",
+               "provisioningState": "Succeeded",
+               "protocol": "*",
+               "sourcePortRange": "*",
+               "destinationPortRange": "9100",
+               "sourceAddressPrefix": "*",
+               "destinationAddressPrefix": "*",
+               "access": "Allow",
+               "priority": 108,
+               "direction": "Inbound"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "copy": {
+        "name": "nicNodeLoop",
+        "count": "[parameters('vmNumberOfnodes')]"
+      },
+      "name": "[concat(variables('nicNodeNamePrefix'), copyIndex(1))]",
+      "type": "Microsoft.Network/networkInterfaces",
+      "location": "[parameters('location')]",
+      "apiVersion": "[variables('apiVersion')]",
+      "dependsOn": [
+        "[concat('Microsoft.Network/virtualNetworks/', 'vnet-scylla')]",
+        "[concat('Microsoft.Network/networkSecurityGroups/', variables('nsgScyllaName'))]",
+        "[concat('Microsoft.Network/publicIPAddresses/', concat(variables('publicIPNodeNamePrefix'), copyIndex(1)))]"
+      ],
+      "tags": {
+        "displayName": "nicNode"
+      },
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "ipconfig1",
+            "properties": {
+              "privateIPAllocationMethod": "Static",
+              "privateIPAddress": "[concat(variables('nicNodeIPPrefix'), add(variables('nicNodeIPStart'),copyIndex()))]",
+              "subnet": {
+                "id": "[variables('nicNodeSubnetRef')]"
+              },
+              "publicIPAddress": {
+                "id": "[resourceId('Microsoft.Network/publicIPAddresses', concat(variables('publicIPNodeNamePrefix'), copyIndex(1)))]"
+              }
+            }
+          }
+        ],
+        "networkSecurityGroup": {
+          "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgScyllaName'))]"
+        }
+      }
+    },
+    {
+      "copy": {
+        "name": "vmNodeLoop",
+        "count": "[parameters('vmNumberOfnodes')]"
+      },
+      "name": "[concat(parameters('Scylla-VM-prefix'), copyIndex(1))]",
+      "type": "Microsoft.Compute/virtualMachines",
+      "location": "[parameters('location')]",
+      "apiVersion": "2017-03-30",
+      "dependsOn": [
+        "[concat('Microsoft.Network/networkInterfaces/', variables('nicNodeNamePrefix'), copyIndex(1))]"
+      ],
+      "tags": {
+        "displayName": "vmNode"
+      },
+      "properties": {
+        "hardwareProfile": {
+          "vmSize": "[parameters('vmScyllaSize')]"
+        },
+        "osProfile": {
+          "computerName": "[concat(parameters('Scylla-VM-prefix'), copyIndex(1))]",
+          "adminUsername": "[parameters('vmAdminUsername')]",
+          "adminPassword": "[parameters('vmAdminPassword')]",
+          "linuxConfiguration": {
+            "ssh": {
+              "publicKeys": [
+                {
+                  "path": "[concat('/home/', parameters('vmAdminUsername'), '/.ssh/authorized_keys')]",
+                  "keyData": "[parameters('adminPublicKey')]"
+                }
+              ]
+            }
+          }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('osImagePublisher')]",
+            "offer": "[variables('osImageOffer')]",
+            "sku": "[variables('osVersion')]",
+            "version": "latest"
+          }
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces/', concat(variables('nicNodeNamePrefix'), copyIndex(1)))]"
+            }
+          ]
+        }
+      },
+      "resources": [
+        {
+          "name": "scriptScyladeploy2",
+          "type": "extensions",
+          "location": "[parameters('location')]",
+          "apiVersion": "[variables('apiVersion')]",
+          "dependsOn": [
+            "[concat('Microsoft.Compute/virtualMachines/', concat(parameters('Scylla-VM-prefix'), copyIndex(1)))]"
+          ],
+          "tags": {
+            "displayName": "scriptScyladeploy2"
+          },
+          "properties": {
+            "publisher": "Microsoft.Azure.Extensions",
+            "type": "CustomScript",
+            "typeHandlerVersion": "2.1",
+            "autoUpgradeMinorVersion": true,
+            "settings": {
+               "skipDos2Unix":false,
+               "timestamp":123456789
+            },
+            "protectedSettings": {
+               "script": "H4sIAAAAAAACA5VUbW/bNhD+rl9xUwMY2EBRfoGTaE2BrEmBYEM7zNmnolBp8SwTpkiNpO0Ye/ntO0ry4qTZmwVY4nP33D1H3vHVV3ypDF8Kv06wWltIobbK1BAsSGy1PcCiOmgtbr5Lk+SwbUAZH4TWECmssk2rMShrMmOFq9aALWrmUKPweMR2qomeDXk9XMzL+axD0KyFqVAesX2NAaqt02AwsGCt9lCrAI22lQgIqB229hgb2KGT47CxOwSxdOHriL2KIKPgYqkxEq4G3gadQf2X/H7JGh1JPauiwAbI2C+3rYxpo7lTxSxwDBUnWxYj+kxy3+1Nt4R1CG3BubR7o62QPuuNcplR7dy1Da/QBOsHEpvkkzwbd9x/S8AaYUSNrk/Efvi/ueTyGIFNskmf8vQshyxEQdc6Rbv7NC+jPxO6rfAogSkYeb64vS/f370tr9/flDd3i+8XV8a+AB7Q83rUV+YPvrJmpepjXR7dDl3St97o7Y8/E/8qZaxqt566IWfn6QjgzZuB3u+25L05i7EGbvpxbQnbILbUvZ/SLzmn9qxa1QOvWmO1YSTCUxMXcO+2+F/Ig+LF7fXi/vqn8u5DVK0sa51t0QWFnq2UxqunYZQtHx2yg2g0lfc8l7JDYdT18Po13H5494LP80CJVH7jiwSAQWO3JrQ0xqEAvhOOa7UcuGQHmhkhS2VbX8BsOj+fXjyiS2HkXsmwLmA6zi/Px/nFrDfvnQo4sCbzy8tpfgKf0MazfJ6PL6b5LCHlxypeKoLkr8LWYK+fzrRshN8UMMof8u63Wo2SxkosoPklMaoqAMM6TyKnSFi8JvoUfcSSWmLb0ux3b0b+jFSxbl8I7d9c4o6bXYO5GRNITl3M+GkZVhPW9UO/pOPsQp02vUeUtAHpeHKe5fSM00co75E8fez3Ttix4lgmUOc8tNYFiLeaVu3VZ0WaZ3H4QcBvIPYbOsJ36UcOn75JYXQ2+YNHhfxXGkyawbPZt/igwu+jz3CUlXo6YB/QlEJKh57EdMHX1ocvLGdDXl6nf6eR6tXU6jDP6etA9KYKdEcEQaqfzW3vSK3Qz8MxeBwgaQ2OM23rpLtGnyCGDjVe8DFo2PqX3XloWv6PnKcefwKUr4OtywYAAA=="
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
